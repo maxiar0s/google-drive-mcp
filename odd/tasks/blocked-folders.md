@@ -1,0 +1,26 @@
+# Block configured Drive folders
+Branch: `feature/restrict-folders`; route: inline; delivery: feature-branch-chain, two dependent local commits, no publication (forecast: 550 authored lines).
+Runner: Node test runner after TypeScript build; baseline: `9509fb8bba8ad15f7cdb79a54dbd850c13eb058b`.
+
+## Specs
+- S1: "quiero mejora añadir un parametro para restringir carpetas. eso mejor". Add a server configuration parameter, CLI help, and configuration documentation. Folder IDs are the stable configuration identifiers.
+- S2: "Bloquear carpetas específicas" — "El MCP podrá acceder al resto de Drive, pero no a las carpetas indicadas ni a sus subcarpetas." Enforce across tools and resources, including native document APIs, direct IDs, search results, and mutation destinations. Fail closed when ancestry cannot be verified. Verify with deterministic mocked Google services without remote credentials.
+- S3: "Dos unidades encadenadas" — "Separar política con sus pruebas e integración con su configuración y pruebas en dos commits dependientes, conservando la funcionalidad completa en esta rama."
+
+## Tasks
+- T1 | S2-S3 | inline (policy with tests; no writer trigger) | complete | commit: `f10b4997156cda7e21154e2fc1b8707ac99f7d3f` | Risk: item 2 (access control).
+- T2 | S1-S3 | inline (integration, configuration, docs and MCP regressions; no writer trigger) | complete | commit: `refs/heads/feature/restrict-folders` (closing commit; hash recorded in Engram session summary) | Risk: item 2 (access control), item 3 (shared client/config behavior).
+
+## Log
+- L1: "quiero mejora añadir un parametro para restringir carpetas. eso mejor"
+- L2: User selected "Bloquear carpetas específicas" in the clarification question, including descendants and leaving other Drive content accessible.
+- L3: Read-only map found native Docs/Sheets/Slides clients bypass Drive handlers; enforcement must cover service construction and resources, not just tool arguments. Existing branch retained; pre-existing untracked `.atl/` will not be included.
+- L4: No meaningful live-account test is authorized; mocked services provide deterministic RED/GREEN checks. Dependencies absent. RDD globally on. Engram mirror pending until written and read back.
+- L5: Installed locked dependencies without scripts. Observed RED for policy/config tests against pass-through policy; GREEN: 53 focused tests, lint/typecheck, build, and diff whitespace check passed. Disk SHA-256 regression tests cover rejected Sheets/Slides creation leaving no persisted files.
+- L6: Full Windows suite: 1230 tests, 1226 passed, 4 failed in token-refresh timeouts/EPERM and POSIX file-mode assertion. Independent baseline/candidate runs confirmed the file-mode and transient-refresh failures on both; stalled-refresh failure reproduced on base then passed; rotated-refresh failure did not reproduce. Auth source/test hashes unchanged. No unrelated auth fixes authorized.
+- L7: Independent verifier found B1: native creation preceded blocked destination validation. One correction added destination preflight and fail-closed path/dedup guards; bounded recheck passed both original persisted-state probes. Version stdout/exit matched baseline; stderr matched after timestamp normalization. Team, alternate-account, direct-ID, shortcut and resource probes passed. Verifier accidentally regenerated ignored workspace build outputs; parent acknowledged and reran the three creation regression tests successfully.
+- L8: Native assessment requires explicit untracked inventory selection before review; pre-existing `.atl/` is excluded. Native review, delivery-strategy decision before any commit (forecast exceeds 400 lines), work-unit commit and mirror refresh remain pending. No commit, push or PR created.
+- L9: User granted "Revisar este cambio". Native four-lens review returned no findings and approved the unchanged functional candidate; exact acknowledgement confirmed `authority: burned` for target `sha256:718b83471874bb34ab6b3ae0ba1c0c74720f777e079b6b546e2aefa063fe8ec3`, candidate tree `503176810cdaac2067b65a6ee02d9821ec5bbdfb`, lineage `review-4a1b85e9c232a154`. The following tracking-only changes do not alter reviewed source.
+- L10: User selected "Dos unidades encadenadas"; split into a policy/test core and dependent integration/configuration/docs/tests. Both stay local on the existing feature branch. Rollback boundary: both commits together remove the feature; neither includes unrelated `.atl/` files or authentication fixes.
+- L11: T1 committed as `f10b4997156cda7e21154e2fc1b8707ac99f7d3f` (243 authored lines). Post-commit assessment returned high/unassessable because unrelated untracked files require an inventory declaration, even with committed-only selection. This does not lower risk or authorize another review of unchanged, already-reviewed functional bytes. T2 closes the feature with the remaining configuration, wiring and regression tests; exact closing hash is retained outside its own self-referential document.
+- L12: Functional proof remains 53 focused tests, lint/typecheck and build passed; full-suite four authentication/platform failures disclosed in L6, with no pending functional-policy blocker. Four-lens review acknowledged and burned; no publication authorized. Final cleanup and memory mirror recorded outside the reviewed source candidate.

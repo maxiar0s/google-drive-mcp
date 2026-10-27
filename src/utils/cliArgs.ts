@@ -1,5 +1,7 @@
 // cliArgs.ts
 export interface RuntimeConfig {
+  /** Drive folder IDs denied by this server, including their descendants. */
+  blockedFolderIds?: string[];
   apiTimeout: number;
   /**
    * Per-attempt timeout for an OAuth token refresh (ms). Kept separate from
@@ -20,6 +22,7 @@ export interface RuntimeConfig {
 }
 
 export const RUNTIME_DEFAULTS: Readonly<RuntimeConfig> = {
+  blockedFolderIds: [],
   apiTimeout: 120_000,
   tokenRefreshTimeout: 15_000,
   retryMax: 3,
@@ -65,10 +68,15 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
   cfg.retryBaseDelay = parseIntOr(process.env.GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY, cfg.retryBaseDelay);
   cfg.disableResources = parseBoolEnv(process.env.GOOGLE_DRIVE_MCP_DISABLE_RESOURCES, cfg.disableResources);
   cfg.maxBodyBytes = parseIntOr(process.env.GOOGLE_DRIVE_MCP_MAX_BODY_BYTES, cfg.maxBodyBytes);
+  let blockedFolders = process.env.GOOGLE_DRIVE_MCP_BLOCKED_FOLDER_IDS;
 
   // CLI args override (numeric flags: --key=value; boolean flags: presence)
   for (const arg of argv) {
-    if (arg.startsWith('--api-timeout=')) {
+    if (arg === '--blocked-folder-ids') {
+      throw new Error('Use --blocked-folder-ids=<folder-id,...>; a nonempty folder ID list is required.');
+    } else if (arg.startsWith('--blocked-folder-ids=')) {
+      blockedFolders = arg.slice('--blocked-folder-ids='.length);
+    } else if (arg.startsWith('--api-timeout=')) {
       cfg.apiTimeout = parseIntOr(arg.split('=')[1], cfg.apiTimeout);
     } else if (arg.startsWith('--token-refresh-timeout=')) {
       cfg.tokenRefreshTimeout = parseIntOr(arg.split('=')[1], cfg.tokenRefreshTimeout);
@@ -94,6 +102,14 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
   // bricking the HTTP transport. Placed after the CLI loop so a flag is covered
   // as well as the environment variable.
   if (cfg.maxBodyBytes < 1) cfg.maxBodyBytes = DEFAULTS.maxBodyBytes;
+  cfg.blockedFolderIds = [];
+  if (blockedFolders !== undefined) {
+    const ids = blockedFolders.split(',').map(id => id.trim());
+    if (ids.some(id => !/^[a-zA-Z0-9_-]+$/.test(id))) {
+      throw new Error('Blocked folder IDs must be a nonempty comma-separated list of Drive IDs, not names or URLs.');
+    }
+    cfg.blockedFolderIds = [...new Set(ids)];
+  }
 
   return cfg;
 }

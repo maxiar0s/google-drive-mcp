@@ -21,6 +21,7 @@ CLI arguments take priority over their environment-variable equivalents. Authent
 | `--team` | off | Enable multi-user team mode; requires HTTP |
 | `--issuer-url <url>` | — | Public HTTPS issuer URL required by team mode; HTTP is accepted only for localhost |
 | `--no-resources[=<bool>]` | false | Disable `gdrive:///` resources while leaving tools enabled; an explicit false value re-enables resources |
+| `--blocked-folder-ids=<id,...>` | unset | Deny access to these Drive folders and all descendants, across tools and resources |
 | `--api-timeout=<ms>` | `120000` | Per-attempt timeout; `0` disables it |
 | `--token-refresh-timeout=<ms>` | `15000` | Per-attempt timeout for an OAuth access-token refresh; `0` disables it |
 | `--retry-max=<n>` | `3` | Maximum retry attempts on retryable errors (429, 503, 504, timeouts, and network failures); `0` disables retries |
@@ -46,6 +47,29 @@ Flags are read from the server's own command line. For a client that launches th
 ```
 
 The environment-variable equivalents in [Resources, timeout, and retry](#resources-timeout-and-retry) are an alternative for clients that pass an `env` block instead of extra arguments.
+
+## Block specific folders
+
+Pass stable Drive folder IDs (the ID after `/folders/` in a folder URL), not folder names or complete URLs:
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["-y", "@piotr-agier/google-drive-mcp", "--blocked-folder-ids=FOLDER_ID_1,FOLDER_ID_2"]
+    }
+  }
+}
+```
+
+Alternatively, set `GOOGLE_DRIVE_MCP_BLOCKED_FOLDER_IDS=FOLDER_ID_1,FOLDER_ID_2`. The CLI value overrides the environment. Unset both to retain unrestricted operation; empty or malformed lists are rejected rather than silently disabling the policy. Restart the server after changing configuration.
+
+Blocked folders, their descendants, and shortcuts targeting blocked content are omitted from file searches and resource listings. Direct reads and writes, native Docs/Sheets/Slides operations, copies, and movement into blocked destinations are denied. Mutations to ancestors of blocked folders are also denied because they can affect blocked content indirectly. Calendar operations are unaffected.
+
+The policy checks ancestry using the active account's Drive metadata permissions and fails closed if verification fails. An account unable to read metadata for configured folders may be unable to mutate other files, because ancestor safety cannot be established. Filtered list pages may be empty while still returning a continuation token; keep paginating. Blocking a shared-drive root does not remove its name from the separate shared-drive discovery listing.
+
+This is a server-side policy, not a change to Google OAuth permissions. It does not restrict other applications using the same credentials, public URLs fetched outside Drive APIs, or changes made concurrently by other clients between verification and an operation. Use Google-side sharing permissions when you need a credential-level boundary.
 
 ## Credentials and local OAuth
 

@@ -3,6 +3,24 @@ import test from 'node:test';
 
 import { loadRuntimeConfig } from '../src/utils/cliArgs.js';
 
+test('blocked folder IDs support env, CLI precedence, and strict validation', () => {
+  const key = 'GOOGLE_DRIVE_MCP_BLOCKED_FOLDER_IDS';
+  const saved = process.env[key];
+  try {
+    delete process.env[key];
+    assert.deepEqual(loadRuntimeConfig([]).blockedFolderIds, []);
+    process.env[key] = 'folder_A, folder_B,folder_A';
+    assert.deepEqual(loadRuntimeConfig([]).blockedFolderIds, ['folder_A', 'folder_B']);
+    assert.deepEqual(loadRuntimeConfig(['--blocked-folder-ids=folder_C']).blockedFolderIds, ['folder_C']);
+    assert.throws(() => loadRuntimeConfig(['--blocked-folder-ids=']), /folder/i);
+    assert.throws(() => loadRuntimeConfig(['--blocked-folder-ids']), /folder/i);
+    assert.throws(() => loadRuntimeConfig(['--blocked-folder-ids=https://drive.google.com/folder']), /folder/i);
+  } finally {
+    if (saved === undefined) delete process.env[key];
+    else process.env[key] = saved;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Helper — save & restore GOOGLE_DRIVE_MCP_DISABLE_RESOURCES around each test
 // ---------------------------------------------------------------------------

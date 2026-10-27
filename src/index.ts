@@ -47,6 +47,7 @@ import {
 import type { AccountOps, AddAccountResult, ToolContext, ToolResult } from './types.js';
 import { errorResponse } from './types.js';
 import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cliArgs.js';
+import { FolderAccessPolicy } from './utils/folderAccess.js';
 import { allAuthModeOverrideEnvVars } from './auth/externalAuth.js';
 import { GOOGLE_CALLBACK_PATH, isLoopbackHost, loadTeamConfig } from './auth/team/config.js';
 import { createTeamRuntime, type TeamRuntime } from './auth/team/runtime.js';
@@ -113,7 +114,8 @@ function logWithUser(userId: string, email?: string): (message: string, data?: a
 }
 
 const runtimeConfig = loadRuntimeConfig();
-log('Runtime config:', runtimeConfig);
+// Keep diagnostic output stable and avoid logging folder policy identifiers.
+log('Runtime config:', Object.fromEntries(Object.entries(runtimeConfig).filter(([key]) => key !== 'blockedFolderIds')));
 
 // -----------------------------------------------------------------------------
 // AUTH / ACCOUNT ACCESS
@@ -165,7 +167,7 @@ async function getDefaultAccount(): Promise<AccountRecord> {
   return account;
 }
 
-async function getDriveFor(account: AccountRecord): Promise<drive_v3.Drive> {
+async function getRawDriveFor(account: AccountRecord): Promise<drive_v3.Drive> {
   const cached = _driveByAlias.get(account.alias);
   if (cached) return cached;
   const sys = requireAuthSystem();
@@ -173,6 +175,11 @@ async function getDriveFor(account: AccountRecord): Promise<drive_v3.Drive> {
   const drive = google.drive({ version: 'v3', auth: client });
   _driveByAlias.set(account.alias, drive);
   return drive;
+}
+
+async function getDriveFor(account: AccountRecord, config: RuntimeConfig = runtimeConfig): Promise<drive_v3.Drive> {
+  const raw = await getRawDriveFor(account);
+  return new FolderAccessPolicy(raw, config.blockedFolderIds ?? []).protect(raw, 'drive');
 }
 
 async function getCalendarFor(account: AccountRecord): Promise<calendar_v3.Calendar> {
@@ -381,7 +388,8 @@ function buildAccountOps(): AccountOps {
 // HELPER FUNCTIONS
 // -----------------------------------------------------------------------------
 
-async function resolvePath(pathStr: string, drive: drive_v3.Drive): Promise<string> {
+async function resolvePath(pathStr: string, drive: drive_v3.Drive, verifyAccess = false): Promise<string> {
+  if (verifyAccess) await drive.files.get({ fileId: 'root', fields: 'id', supportsAllDrives: true });
   if (!pathStr || pathStr === '/') return 'root';
 
   const parts = pathStr.replace(/^\/+|\/+$/g, '').split('/');
@@ -425,14 +433,10 @@ async function resolvePath(pathStr: string, drive: drive_v3.Drive): Promise<stri
   return currentFolderId;
 }
 
-async function resolveFolderId(input: string | undefined, drive: drive_v3.Drive): Promise<string> {
-  if (!input) return 'root';
-
-  if (input.startsWith('/')) {
-    return resolvePath(input, drive);
-  } else {
-    return input;
-  }
+async function resolveFolderId(input: string | undefined, drive: drive_v3.Drive, verifyAccess = false): Promise<string> {
+  const folderId = input?.startsWith('/') ? await resolvePath(input, drive, verifyAccess) : input || 'root';
+  if (verifyAccess) await drive.files.get({ fileId: folderId, fields: 'id', supportsAllDrives: true });
+  return folderId;
 }
 
 function validateTextFileExtension(name: string) {
@@ -442,7 +446,7 @@ function validateTextFileExtension(name: string) {
   }
 }
 
-async function checkFileExists(name: string, parentFolderId: string = 'root', drive: drive_v3.Drive): Promise<string | null> {
+async function checkFileExists(name: string, parentFolderId: string = 'root', drive: drive_v3.Drive, failClosed = false): Promise<string | null> {
   try {
     const escapedName = escapeDriveQuery(name);
     const query = `name = '${escapedName}' and '${parentFolderId}' in parents and trashed = false`;
@@ -462,6 +466,7 @@ async function checkFileExists(name: string, parentFolderId: string = 'root', dr
     }
     return null;
   } catch (error) {
+    if (failClosed) throw error;
     log('Error checking file existence:', error);
     return null;
   }
@@ -576,6 +581,7 @@ async function buildToolContext(
   sessionId: string,
   scopedAccount?: AccountRecord,
   opts: { tolerateClientFailure?: boolean } = {},
+  config: RuntimeConfig = runtimeConfig,
 ): Promise<ToolContext> {
   const sys = requireAuthSystem();
   const account = scopedAccount ?? defaultAccountOrUndefined();
@@ -596,9 +602,13 @@ async function buildToolContext(
   let drive: drive_v3.Drive | undefined;
   let calendar: calendar_v3.Calendar | undefined;
   let authClient: any;
+  let protectedGoogle = google;
   if (account) {
     try {
-      drive = await getDriveFor(account);
+      const rawDrive = await getRawDriveFor(account);
+      const policy = new FolderAccessPolicy(rawDrive, config.blockedFolderIds ?? []);
+      drive = policy.protect(rawDrive, 'drive');
+      protectedGoogle = policy.protectGoogle(google);
       calendar = await getCalendarFor(account); // pre-warm calendar cache
       authClient = await sys.factory.getClient(account.alias);
     } catch (err) {
@@ -614,22 +624,22 @@ async function buildToolContext(
 
   return {
     authClient,
-    google,
+    google: protectedGoogle,
     getDrive: () => drive ?? noAccount(),
     getCalendar: () => calendar ?? noAccount(),
     log,
-    resolvePath: (pathStr) => (drive ? resolvePath(pathStr, drive) : noAccount()),
-    resolveFolderId: (input) => (drive ? resolveFolderId(input, drive) : noAccount()),
+    resolvePath: (pathStr) => (drive ? resolvePath(pathStr, drive, !!config.blockedFolderIds?.length) : noAccount()),
+    resolveFolderId: (input) => (drive ? resolveFolderId(input, drive, !!config.blockedFolderIds?.length) : noAccount()),
     checkFileExists: (name, parentFolderId) =>
-      drive ? checkFileExists(name, parentFolderId, drive) : noAccount(),
+      drive ? checkFileExists(name, parentFolderId, drive, !!config.blockedFolderIds?.length) : noAccount(),
     validateTextFileExtension,
-    runtimeConfig,
+    runtimeConfig: config,
 
     // Multi-account surface
     sessionId,
     resolveAccount: (input, kind, acceptableScopes) =>
       sys.resolver.resolve(input, kind, { sessionId, acceptableScopes }),
-    getDriveFor,
+    getDriveFor: account => getDriveFor(account, config),
     getCalendarFor,
     getAuthClientFor,
     accountOps: buildAccountOps(),
@@ -663,6 +673,7 @@ async function handleTeamToolCall(
   extra:
     | { sessionId?: string; authInfo?: { extra?: Record<string, unknown>; scopes?: string[] } }
     | undefined,
+  config: RuntimeConfig = runtimeConfig,
 ): Promise<ToolResult> {
   const runtime = teamRuntime!;
   const sub = extra?.authInfo?.extra?.sub;
@@ -726,7 +737,7 @@ async function handleTeamToolCall(
     }
 
     const sessionId = extra?.sessionId ?? STDIO_SESSION_ID;
-    const ctx = await buildTeamToolContext(sessionId, sub, email);
+    const ctx = await buildTeamToolContext(sessionId, sub, email, config);
     for (const mod of domainModules) {
       const result = await mod.handleTool(toolName, rawArgs, ctx);
       if (result !== null) return result;
@@ -747,9 +758,12 @@ async function buildTeamToolContext(
   sessionId: string,
   sub: string,
   email?: string,
+  config: RuntimeConfig = runtimeConfig,
 ): Promise<ToolContext> {
   const runtime = teamRuntime!;
-  const drive = await runtime.clientFactory.getDrive(sub);
+  const rawDrive = await runtime.clientFactory.getDrive(sub);
+  const policy = new FolderAccessPolicy(rawDrive, config.blockedFolderIds ?? []);
+  const drive = policy.protect(rawDrive, 'drive');
   const calendar = await runtime.clientFactory.getCalendar(sub);
   const authClient = await runtime.clientFactory.getClient(sub);
 
@@ -759,15 +773,15 @@ async function buildTeamToolContext(
 
   return {
     authClient,
-    google,
+    google: policy.protectGoogle(google),
     getDrive: () => drive,
     getCalendar: () => calendar,
     log: logWithUser(sub, email),
-    resolvePath: (pathStr) => resolvePath(pathStr, drive),
-    resolveFolderId: (input) => resolveFolderId(input, drive),
-    checkFileExists: (name, parentFolderId) => checkFileExists(name, parentFolderId, drive),
+    resolvePath: (pathStr) => resolvePath(pathStr, drive, !!config.blockedFolderIds?.length),
+    resolveFolderId: (input) => resolveFolderId(input, drive, !!config.blockedFolderIds?.length),
+    checkFileExists: (name, parentFolderId) => checkFileExists(name, parentFolderId, drive, !!config.blockedFolderIds?.length),
     validateTextFileExtension,
-    runtimeConfig,
+    runtimeConfig: config,
     userId: sub,
 
     sessionId,
@@ -820,7 +834,7 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
   );
 
   if (resourcesEnabled) {
-    registerResourceHandlers(s);
+    registerResourceHandlers(s, config);
   }
 
   s.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -841,7 +855,7 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
 
   s.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     if (teamRuntime) {
-      return handleTeamToolCall(request.params.name, request.params.arguments ?? {}, extra);
+      return handleTeamToolCall(request.params.name, request.params.arguments ?? {}, extra, config);
     }
     await ensureAuthSystem();
     const toolName = request.params.name;
@@ -863,7 +877,7 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
         // account's context for back-compat but ignore any `account` arg. Tolerate
         // a missing/unusable default so manage_accounts still works with zero
         // accounts or a revoked default (its handlers only touch accountOps).
-        ctx = await buildToolContext(sessionId, undefined, { tolerateClientFailure: true });
+        ctx = await buildToolContext(sessionId, undefined, { tolerateClientFailure: true }, config);
         toolArgs = rawArgs;
       } else {
         const meta = TOOL_META[toolName] ?? FALLBACK_META;
@@ -883,7 +897,7 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
           );
         }
         const account = targeting.accounts[0];
-        ctx = await buildToolContext(sessionId, account);
+        ctx = await buildToolContext(sessionId, account, {}, config);
         toolArgs = stripAccountArg(rawArgs);
       }
 
@@ -904,12 +918,12 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
 // Registers the optional MCP "resources" capability handlers (gdrive:/// file
 // listing and reading). Skipped entirely when the resources capability is
 // disabled via GOOGLE_DRIVE_MCP_DISABLE_RESOURCES / --no-resources.
-function registerResourceHandlers(s: Server): void {
+function registerResourceHandlers(s: Server, config: RuntimeConfig = runtimeConfig): void {
   s.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     await ensureAuthSystem();
     log('Handling ListResources request', { params: request.params });
     const account = await getDefaultAccount();
-    const drive = await getDriveFor(account);
+    const drive = await getDriveFor(account, config);
     const pageSize = 1000;
     const params: drive_v3.Params$Resource$Files$List = {
       pageSize,
@@ -943,7 +957,7 @@ function registerResourceHandlers(s: Server): void {
     await ensureAuthSystem();
     log('Handling ReadResource request', { uri: request.params.uri });
     const account = await getDefaultAccount();
-    const drive = await getDriveFor(account);
+    const drive = await getDriveFor(account, config);
     const fileId = request.params.uri.replace("gdrive:///", "");
 
     const file = await drive.files.get({
@@ -1046,6 +1060,9 @@ Team Mode (multi-user HTTP deployments):
   --issuer-url <url>         Public https URL this server is reachable at (required with --team)
 
 Options:
+  --blocked-folder-ids=<id,...>
+                             Block these Drive folders and all descendants across tools
+                             and resources. Use folder IDs, not names or URLs.
   --no-resources[=<bool>]    Disable the MCP resource protocol (gdrive:/// listing/reading);
                              tools stay available. Bare flag disables; --no-resources=false
                              re-enables (overrides a truthy GOOGLE_DRIVE_MCP_DISABLE_RESOURCES).
@@ -1072,6 +1089,7 @@ Environment Variables:
   GOOGLE_DRIVE_MCP_AUTH_PORT            Starting port for OAuth callback server (default: 3000, uses 5 consecutive ports)
 
   Common Configuration:
+  GOOGLE_DRIVE_MCP_BLOCKED_FOLDER_IDS   Comma-separated Drive folder IDs to block, including descendants. CLI --blocked-folder-ids takes priority. Unset means no folder restrictions.
   GOOGLE_DRIVE_MCP_SCOPES               Comma-separated scopes to request (aliases or full URLs; defaults to all Drive/Docs/Sheets/Slides/Calendar scopes). Applies to local OAuth, external OAuth, and service account modes.
   GOOGLE_DRIVE_MCP_DISABLE_RESOURCES    Disable the MCP resource protocol (gdrive:/// listing/reading); tools stay available. Accepts 1/0, true/false, yes/no, on/off. Mirrored by the --no-resources[=<bool>] flag. (default: enabled)
 
