@@ -38,12 +38,8 @@ import { fetchUserInfo } from './auth/userInfo.js';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
-import {
-  getExtensionFromFilename,
-  escapeDriveQuery,
-  ALL_DRIVES_LIST_PARAMS,
-  PARENT_SCOPED_LIST_PARAMS,
-} from './utils.js';
+import { ALL_DRIVES_LIST_PARAMS } from './utils.js';
+import { resolvePath, resolveFolderId, validateTextFileExtension, checkFileExists as sharedCheckFileExists } from './utils/driveHelpers.js';
 import type { AccountOps, AddAccountResult, ToolContext, ToolResult } from './types.js';
 import { errorResponse } from './types.js';
 import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cliArgs.js';
@@ -60,8 +56,6 @@ import * as sheetsTools from './tools/sheets.js';
 import * as slidesTools from './tools/slides.js';
 import * as calendarTools from './tools/calendar.js';
 import { ADMIN_TOOLS, FALLBACK_META, TOOL_META } from './tools/toolMeta.js';
-
-const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 // Auth system — initialized on first request.
 let authSystem: AuthSystem | null = null;
@@ -388,88 +382,8 @@ function buildAccountOps(): AccountOps {
 // HELPER FUNCTIONS
 // -----------------------------------------------------------------------------
 
-async function resolvePath(pathStr: string, drive: drive_v3.Drive, verifyAccess = false): Promise<string> {
-  if (verifyAccess) await drive.files.get({ fileId: 'root', fields: 'id', supportsAllDrives: true });
-  if (!pathStr || pathStr === '/') return 'root';
-
-  const parts = pathStr.replace(/^\/+|\/+$/g, '').split('/');
-  let currentFolderId: string = 'root';
-
-  for (const part of parts) {
-    if (!part) continue;
-    const escapedPart = escapeDriveQuery(part);
-    const response = await drive.files.list({
-      q: `'${currentFolderId}' in parents and name = '${escapedPart}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
-      fields: 'files(id)',
-      spaces: 'drive',
-      // Parent-scoped probe with a create-on-empty fallback: PARENT_SCOPED_LIST_PARAMS
-      // surfaces Shared Drive items without corpora=allDrives, so an
-      // incompleteSearch partial result can't make us create a duplicate.
-      ...PARENT_SCOPED_LIST_PARAMS
-    });
-
-    if (!response.data.files?.length) {
-      const folderMetadata = {
-        name: part,
-        mimeType: FOLDER_MIME_TYPE,
-        parents: [currentFolderId]
-      };
-      const folder = await drive.files.create({
-        requestBody: folderMetadata,
-        fields: 'id',
-        supportsAllDrives: true
-      });
-
-      if (!folder.data.id) {
-        throw new Error(`Failed to create intermediate folder: ${part}`);
-      }
-
-      currentFolderId = folder.data.id;
-    } else {
-      currentFolderId = response.data.files[0].id!;
-    }
-  }
-
-  return currentFolderId;
-}
-
-async function resolveFolderId(input: string | undefined, drive: drive_v3.Drive, verifyAccess = false): Promise<string> {
-  const folderId = input?.startsWith('/') ? await resolvePath(input, drive, verifyAccess) : input || 'root';
-  if (verifyAccess) await drive.files.get({ fileId: folderId, fields: 'id', supportsAllDrives: true });
-  return folderId;
-}
-
-function validateTextFileExtension(name: string) {
-  const ext = getExtensionFromFilename(name);
-  if (!['txt', 'md'].includes(ext)) {
-    throw new Error("File name must end with .txt or .md for text files.");
-  }
-}
-
 async function checkFileExists(name: string, parentFolderId: string = 'root', drive: drive_v3.Drive, failClosed = false): Promise<string | null> {
-  try {
-    const escapedName = escapeDriveQuery(name);
-    const query = `name = '${escapedName}' and '${parentFolderId}' in parents and trashed = false`;
-
-    const res = await drive.files.list({
-      q: query,
-      fields: 'files(id, name, mimeType)',
-      pageSize: 1,
-      // Dedup guard: PARENT_SCOPED_LIST_PARAMS (no corpora=allDrives) so an
-      // incompleteSearch partial result can't miss an existing file and let a
-      // duplicate be created.
-      ...PARENT_SCOPED_LIST_PARAMS
-    });
-
-    if (res.data.files && res.data.files.length > 0) {
-      return res.data.files[0].id || null;
-    }
-    return null;
-  } catch (error) {
-    if (failClosed) throw error;
-    log('Error checking file existence:', error);
-    return null;
-  }
+  return sharedCheckFileExists(name, parentFolderId, drive, failClosed, log);
 }
 
 // -----------------------------------------------------------------------------
