@@ -19,6 +19,7 @@ gcp-oauth.keys.json
 !gcp-oauth.keys.example.json
 client_secret.json
 client_secret_*
+secrets/
 
 # Token files - NEVER commit these
 google-tokens.json
@@ -41,6 +42,7 @@ Thumbs.db
 .claude/settings.local.json
 AGENTS.local.md
 CLAUDE.local.md
+.atl/
 
 # Test coverage
 coverage/
