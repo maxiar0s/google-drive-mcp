@@ -50,6 +50,11 @@
         "start": "node dist/index.js",
         "auth": "node dist/index.js auth",
         "watch": "node scripts/build.js --watch",
+        "workers:dev": "wrangler dev --local",
+        "workers:check": "wrangler deploy --dry-run --outdir dist/worker",
+        "workers:deploy": "wrangler deploy",
+        "test:workers": "npm run test:build && node --test .tmp-test/test/cloudflare-worker.test.js",
+        "test:workers:runtime": "node scripts/test-worker-runtime.js",
         "registry:validate": "node scripts/registry-metadata.js validate",
         "registry:verify": "node scripts/registry-metadata.js verify",
         "prepare": "npm run build",
@@ -88,6 +93,7 @@
         "esbuild": "^0.25.8",
         "eslint": "^9.39.3",
         "shx": "^0.4.0",
-        "typescript": "^5.6.2"
+        "typescript": "^5.6.2",
+        "wrangler": "^4.154.0"
     }
 }

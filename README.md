@@ -27,6 +27,8 @@ Compatibility is determined by the transport and authentication flow a client su
 
 See [Client configuration](docs/clients.md#client-configuration) for configuration examples and transport requirements.
 
+For a single-account server on Cloudflare Workers, see the [Workers setup guide](docs/cloudflare-workers.md). It uses a protected stateless `/mcp` endpoint; local filesystem tools and team OAuth are not available in that adapter.
+
 ## Quick start
 
 ### 1. Create Google OAuth credentials
