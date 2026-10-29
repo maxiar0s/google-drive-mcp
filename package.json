@@ -52,7 +52,7 @@
         "watch": "node scripts/build.js --watch",
         "workers:dev": "wrangler dev --local",
         "workers:check": "wrangler deploy --dry-run --outdir dist/worker",
-        "workers:deploy": "wrangler deploy",
+        "workers:deploy": "node scripts/prepare-worker-config.js && wrangler deploy --config .cache/worker-deploy/wrangler.json",
         "test:workers": "npm run test:build && node --test .tmp-test/test/cloudflare-worker.test.js",
         "test:workers:runtime": "node scripts/test-worker-runtime.js",
         "registry:validate": "node scripts/registry-metadata.js validate",
@@ -73,6 +73,7 @@
         "google-auth-library": "$google-auth-library"
     },
     "dependencies": {
+        "@cloudflare/workers-oauth-provider": "^1.2.4",
         "@modelcontextprotocol/sdk": "^1.24.0",
         "@types/express": "^5.0.3",
         "express": "^5.1.0",

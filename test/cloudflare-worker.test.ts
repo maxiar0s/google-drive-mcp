@@ -36,6 +36,16 @@ test('Worker fails closed without configured secrets or valid bearer', async () 
   }), env)).status, 401);
 });
 
+test('Static bearer remains valid when OAuth is configured', async () => {
+  const response = await worker.fetch(new Request('https://worker.example/mcp', {
+    method: 'POST',
+    headers: { Authorization: `bearer ${env.MCP_ACCESS_TOKEN}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  }), { ...env, OAUTH_ISSUER: 'https://worker.example', OAUTH_KV: {} });
+  assert.equal(response.status, 200);
+  assert.ok((await response.json() as any).result.tools.some((tool: any) => tool.name === 'search'));
+});
+
 test('Worker initializes using stateless Streamable HTTP', async () => {
   const response = await rpc('initialize', {
     protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' },

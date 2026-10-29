@@ -29,6 +29,51 @@ See [Client configuration](docs/clients.md#client-configuration) for configurati
 
 For a single-account server on Cloudflare Workers, see the [Workers setup guide](docs/cloudflare-workers.md). It uses a protected stateless `/mcp` endpoint; local filesystem tools and team OAuth are not available in that adapter.
 
+## Cloudflare Workers and ChatGPT setup
+
+Use this path to host the stateless `/mcp` endpoint on Cloudflare Workers for **one preconfigured Google account**. Clients can authenticate with the existing private bearer token or, when configured, OAuth. OAuth sign-in must match the Google account associated with the configured refresh token; this is not a multi-user Google-account service. The OAuth integration has not yet been verified end to end with ChatGPT.
+
+### 1. Prepare Google credentials and a refresh token
+
+1. Enable the Google Drive, Docs, Sheets, Slides, and Calendar APIs you need. Configure the Google OAuth consent screen and add your account as a test user if the app is in testing.
+2. Create a Google OAuth **Web application** client. In Google Cloud Console, open **APIs & Services → Credentials**, select that client, and add these authorized redirect URIs:
+   - `http://127.0.0.1:3000/oauth2callback` for the local authorization flow.
+   - `https://<worker>.<subdomain>.workers.dev/oauth/google/callback` for the Worker OAuth flow. Replace the host with your actual Worker origin; keep the local URI too.
+3. Download the client JSON to a private location. Use the same client's `client_id` and `client_secret` throughout; never commit or upload the JSON.
+4. Obtain a refresh token for the Google account to expose. The token must include both `openid` and `https://www.googleapis.com/auth/userinfo.email` as well as the Google API scopes your tools need. The normal `npm run auth` flow does **not** request the identity scopes by default. In a local Node MCP client, use `manage_accounts(action="add", account_id="personal")` to authorize the same account with those identity scopes. See [Multi-Account Support](docs/authentication.md#multi-account-support).
+5. The resulting account record is stored in `tokens.json` (by default `~/.config/google-drive-mcp/tokens.json`; on Windows, `%USERPROFILE%\.config\google-drive-mcp\tokens.json`). Copy its `refreshToken` value privately for Cloudflare. Do not share or commit the token file. The configured path may differ when `GOOGLE_DRIVE_MCP_TOKEN_PATH` or `XDG_CONFIG_HOME` is set.
+
+### 2. Create KV and configure Workers Builds
+
+1. Create a Workers KV namespace in the Cloudflare dashboard. Copy its **namespace ID**, not the Cloudflare account ID.
+2. Connect this repository to a Worker. After merging these changes into **`cloudflare-worker`**, push that branch to the remote and select `cloudflare-worker` as the production branch under the Worker's **Settings → Build → Branch control**. Do not select `master` or `main` for these changes.
+3. In the build's **Variables and secrets**, add `OAUTH_KV_ID` as a text variable with the namespace ID. It is a **build variable**, not a Worker runtime secret.
+4. Set the build command to `npm run build` and the deploy command to `npm run workers:deploy`. The deploy script generates an ignored Wrangler configuration with the `OAUTH_KV` binding. Missing or invalid `OAUTH_KV_ID` stops deployment; each deployer supplies their own ID without editing `wrangler.jsonc`.
+
+### 3. Set Worker runtime variables and secrets
+
+Build variables are not automatically available to the running Worker. In the Worker's **Settings → Variables & Secrets**, configure these separately:
+
+| Runtime name | Recommended type | Value |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | Text or Secret | Client ID from the Google OAuth Web client |
+| `GOOGLE_CLIENT_SECRET` | Secret | Secret from that same client |
+| `GOOGLE_REFRESH_TOKEN` | Secret | Refresh token for the configured Google account |
+| `MCP_ACCESS_TOKEN` | Secret | Independent cryptographically random bearer token, at least 32 characters |
+| `OAUTH_ISSUER` | Text | Worker origin, e.g. `https://<worker>.<subdomain>.workers.dev`, without `/mcp` or a trailing slash |
+| `GOOGLE_DRIVE_MCP_BLOCKED_FOLDER_IDS` | Text or Secret | Optional comma-separated folder IDs |
+
+For a folder URL such as `https://drive.google.com/drive/folders/FOLDER_ID?usp=sharing`, use only `FOLDER_ID`, without the path or query parameters. The policy blocks the listed folders and their descendants; Google permissions remain the primary authorization boundary. Never put credentials in URLs or logs.
+
+### 4. Deploy and connect
+
+1. Commit and push the branch containing the Worker changes according to your repository workflow. Confirm Cloudflare's **production branch** is that branch, then trigger a build and check its branch, commit, and result. Build settings apply to the next build. Enable the `workers.dev` URL or configure a domain if necessary.
+2. Verify the runtime variables and secrets are still present after deployment. A successful build alone does not verify Google authorization or the complete OAuth flow.
+3. In ChatGPT, enable developer mode if available for your account or workspace, create a custom MCP app, select **OAuth**, and use `https://<worker>.<subdomain>.workers.dev/mcp`. Sign in to the same Google account as the refresh token and review the consent screen. If the connection fails, inspect the build and Worker logs without sharing secrets.
+4. For an MCP client that supports a custom header, the existing bearer-token path remains available: `Authorization: Bearer <MCP_ACCESS_TOKEN>`. OAuth revocation does not revoke that separate bearer token. Anyone holding it can exercise the configured Google account's permissions, including writes.
+
+See the [Workers setup guide](docs/cloudflare-workers.md) for local development, runtime limitations, and troubleshooting. Do not disable authentication to connect a client.
+
 ## Quick start
 
 ### 1. Create Google OAuth credentials

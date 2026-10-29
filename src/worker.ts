@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -18,6 +19,9 @@ export interface WorkerEnv {
   GOOGLE_CLIENT_SECRET: string;
   GOOGLE_REFRESH_TOKEN: string;
   GOOGLE_DRIVE_MCP_BLOCKED_FOLDER_IDS?: string;
+  OAUTH_ISSUER?: string;
+  OAUTH_KV?: unknown;
+  OAUTH_PROVIDER?: OAuthHelpers;
 }
 
 const modules = [driveTools, docsTools, sheetsTools, slidesTools, calendarTools];
@@ -64,8 +68,18 @@ async function readBody(request: Request): Promise<unknown | Response> {
 }
 
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx?: unknown): Promise<Response> {
     const url = new URL(request.url);
+    const oauthPath = url.pathname === '/authorize' || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/.well-known/');
+    const presented = request.headers.get('authorization')?.match(/^Bearer ([^\s]+)$/i)?.[1] ?? '';
+    const actual = Buffer.from(presented);
+    const configured = Buffer.from(env.MCP_ACCESS_TOKEN ?? '');
+    const staticToken = configured.length >= 32 && actual.length === configured.length && timingSafeEqual(actual, configured);
+    if (oauthPath || (url.pathname === '/mcp' && env.OAUTH_ISSUER && !staticToken)) {
+      if (!env.OAUTH_ISSUER || !env.OAUTH_KV) return new Response('OAuth is not configured', { status: 503 });
+      const { handleOAuth } = await import('./workerOAuth.js');
+      return handleOAuth(request, env, ctx, (req, bindings) => this.fetch(req, bindings, ctx));
+    }
     if (url.pathname !== '/mcp') return new Response('Not found', { status: 404 });
     if (!env.MCP_ACCESS_TOKEN || env.MCP_ACCESS_TOKEN.length < 32 ||
         !env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REFRESH_TOKEN) {

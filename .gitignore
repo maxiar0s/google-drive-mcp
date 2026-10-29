@@ -40,9 +40,11 @@ Thumbs.db
 # Agent/tool config
 .codex/
 .claude/settings.local.json
+.archify/
+.atl/
 AGENTS.local.md
 CLAUDE.local.md
-.atl/
+odd/
 
 # Test coverage
 coverage/
